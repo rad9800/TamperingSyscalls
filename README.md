@@ -53,5 +53,8 @@ Then in the exception handler you need to fix arguments for the corresponding fu
 
 It's possible to provide the EDR with fake telemetry, but that would take away the focus of what is being achieved here. I leave that to another day or a blog post.
 
+### Limitations
+There are a few functions we cannot set a HWBP on as these are used innately to set the HWBP.
+We can only easily spoof the **first 4 function arguments R10, RDX, R8, R9** as these are the one's easy to replace. It is possible to do the remaining but I cannot be bothered frankly.
 
 [TamperingSyscall's Blog Post](https://fool.ish.wtf/2022/08/tamperingsyscalls.html)
