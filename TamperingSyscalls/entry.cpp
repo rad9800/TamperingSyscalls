@@ -176,11 +176,12 @@ int main()
 		PRINT( "Error : 0x%x\n", status );
 	}
 
+	// Set up these 4 in the OneShotHardwareBreakpointHandler
 	pNtMapViewOfSectionArgs.SectionHandle = section;
 	pNtMapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
 	pNtMapViewOfSectionArgs.BaseAddress = &addr;
 	pNtMapViewOfSectionArgs.ZeroBits = 0;
-	// Need to set these up in SpoofSyscaller.
+	// Set up the remaining arguments in SpoofSyscaller.
 	pNtMapViewOfSectionArgs.CommitSize = 0;
 	pNtMapViewOfSectionArgs.SectionOffset = NULL;
 	pNtMapViewOfSectionArgs.ViewSize = &size;
@@ -221,19 +222,17 @@ NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
 	defaultType fDefaultType;
 	typeNtMapViewOfSection fNtMapViewOfSection;
 
-	// Pass the arguments beyond 4th parameter here
 	switch( StatePointer ) {
-	case 0:
-		fDefaultType = (defaultType)FunctionAddress;
-		status = fDefaultType();
-		break;
 	case 1:
+		// Pass the arguments beyond 4th parameter here
+		// You need to specify the typedef and pass the arguments after the 4th parameter as these use the stack.
 		fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
 		status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize,
 			pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition,
 			pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
 		break;
-	case 2:
+	// If we are using functions with <=4 arguments we can just fall through to the default handler.
+	default:
 		fDefaultType = (defaultType)FunctionAddress;
 		status = fDefaultType();
 		break;
