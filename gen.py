@@ -105,7 +105,7 @@ def build_function_case(data: dict):
             if idx <= 3:
                 args.append("NULL")
             else:
-                args.append(f"p{function_name}.{param['name']}")
+                args.append(f"p{function_name}Args.{param['name']}")
 
             joined = ", ".join(args)
 
@@ -130,7 +130,9 @@ def build_oneshot_case(data: dict):
             if idx >= len(params):
                 break
             register = mappings[idx]
-            case += f"    ExceptionInfo->ContextRecord->{register} =\n    (DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->{params[idx]['name']};\n    break;\n\n"
+            case += f"    ExceptionInfo->ContextRecord->{register} =\n    (DWORD_PTR)(({function_name}Args*)(StateArray[EnumState].arguments))->{params[idx]['name']};\n\n"
+        
+        case += f'    break;\n\n'
         code += case
 
     return f"{code}\n"
