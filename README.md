@@ -52,3 +52,6 @@ Then add this to the state array in the position we will be calling it
 Then in the exception handler you need to fix arguments for the corresponding function. 
 
 It's possible to provide the EDR with fake telemetry, but that would take away the focus of what is being achieved here. I leave that to another day or a blog post.
+
+
+[TamperingSyscall's Blog Post](https://fool.ish.wtf/2022/08/tamperingsyscalls.html)
