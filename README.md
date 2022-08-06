@@ -20,38 +20,9 @@ BYTE stub[] = { 0x0F, 0x05 };
 SetUnhandledExceptionFilter( OneShotHardwareBreakpointHandler );
 ```
 5. This exception handler will disable the hardware breakpoint for Dr0 only if the Dr0 and RIP match.
-6. If it is matching, it'll switch on the StatePointer, and get the corresponding arguments for this function.
-7. It will then fix the arguments into the register, and stack.
+6. It will then skip over the syscall instruction, not executing and return the value in RAX.
 ```c
-switch( StatePointer ) {
-case 0:
-ExceptionInfo->ContextRecord->Rcx =
-  (DWORD_PTR)((NtGetContextThread*)(StateArray[StatePointer].arguments))->ThreadHandle;
-  ExceptionInfo->ContextRecord->Rdx =
-	(DWORD_PTR)((NtGetContextThread*)(StateArray[StatePointer].arguments))->pContext;
-// put your other states here.
+ExceptionInfo->ContextRecord->Rip += 2;	
 ```
-
-## Howto
-You need to implement your function arguments and setup the state.
-For example the arguments for NtGetContextThread in a structure.
-```c
-typedef struct {
-	HANDLE			ThreadHandle;
-	PCONTEXT		pContext;
-} NtGetContextThread;
-```
-Then make a global copy
-```c
-NtGetContextThread pNtGetThreadContext;
-```
-Then add this to the state array in the position we will be calling it
-```c
-{ 0 , &pNtGetThreadContext},
-```
-Then in the exception handler you need to fix arguments for the corresponding function. 
-
-It's possible to provide the EDR with fake telemetry, but that would take away the focus of what is being achieved here. I leave that to another day or a blog post.
-
 
 [TamperingSyscall's Blog Post](https://fool.ish.wtf/2022/08/tamperingsyscalls.html)
