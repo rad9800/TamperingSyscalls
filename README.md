@@ -1,6 +1,6 @@
 # TamperingSyscalls
 
-Tampering with syscalls. 
+**Tampering with syscalls.** 
 
 1. Set a hardware breakpoint on the address of a syscall instruction which has the bytes `0f05` on the Dr0 register.
 We can locate the stub with this quick memory byte search.
@@ -50,3 +50,5 @@ Then add this to the state array in the position we will be calling it
 { 0 , &pNtGetThreadContext},
 ```
 Then in the exception handler you need to fix arguments for the corresponding function. 
+
+It's possible to provide the EDR with fake telemetry, but that would take away the focus of what is being achieved here. I leave that to another day or a blog post.
