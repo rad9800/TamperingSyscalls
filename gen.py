@@ -43,9 +43,6 @@ def build_arg_struct(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        if not has_minimum_args(params):
-            continue
-
         struct = "typedef struct {\n\r"
         for param in params:
             struct += f"    {param['type']:<27}{param['name']};\n"
