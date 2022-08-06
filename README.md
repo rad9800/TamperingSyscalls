@@ -31,3 +31,22 @@ ExceptionInfo->ContextRecord->Rcx =
 	(DWORD_PTR)((NtGetContextThread*)(StateArray[StatePointer].arguments))->pContext;
 // put your other states here.
 ```
+
+## Howto
+You need to implement your function arguments and setup the state.
+For example the arguments for NtGetContextThread in a structure.
+```c
+typedef struct {
+	HANDLE			ThreadHandle;
+	PCONTEXT		pContext;
+} NtGetContextThread;
+```
+Then make a global copy
+```c
+NtGetContextThread pNtGetThreadContext;
+```
+Then add this to the state array in the position we will be calling it
+```c
+{ 0 , &pNtGetThreadContext},
+```
+Then in the exception handler you need to fix arguments for the corresponding function. 
