@@ -20,9 +20,12 @@ functions.
 #include <Windows.h>
 #include <winternl.h>
 
-#pragma region macros
-#define _DEBUG 1
+constexpr ULONG HashStringFowlerNollVoVariant1a( const char* String );
+constexpr ULONG HashStringFowlerNollVoVariant1a( const wchar_t* String );
 
+#pragma region macros
+
+#define _DEBUG 1
 #if _DEBUG == 0
 #define PRINT( STR, ... )
 #else
@@ -39,6 +42,49 @@ functions.
 
 #define NtCurrentThread() (  ( HANDLE ) ( LONG_PTR ) -2 )
 #define NtCurrentProcess() ( ( HANDLE ) ( LONG_PTR ) -1 )
+
+template <typename Type>
+inline Type RVA2VA( LPVOID Base, LONG Rva ) {
+	return (Type)((ULONG_PTR)Base + Rva);
+}
+
+#define HASHALGO HashStringFowlerNollVoVariant1a         // specify algorithm here
+
+#pragma region HashStringFowlerNollVoVariant1a
+
+constexpr ULONG HashStringFowlerNollVoVariant1a( const char* String )
+{
+	ULONG Hash = 0x811c9dc5;
+
+	while( *String )
+	{
+		Hash ^= (UCHAR)*String++;
+		Hash *= 0x01000193;
+	}
+
+	return Hash;
+}
+
+constexpr ULONG HashStringFowlerNollVoVariant1a( const wchar_t* String )
+{
+	ULONG Hash = 0x811c9dc5;
+
+	while( *String )
+	{
+		Hash ^= (UCHAR)*String++;
+		Hash *= 0x01000193;
+	}
+
+	return Hash;
+}
+#pragma endregion
+
+#define TOKENIZE( x ) #x
+#define CONCAT( X, Y ) X##Y
+#define hash( VAL ) constexpr auto CONCAT( hash, VAL ) = HASHALGO( TOKENIZE( VAL ) );							
+#define dllhash(DLL, VAL ) constexpr auto CONCAT( hash, DLL ) = HASHALGO( VAL );												
+
+dllhash( NTDLL, L"NTDLL.DLL" )
 #pragma endregion
 
 #pragma region structs
@@ -134,19 +180,9 @@ LPVOID FindSyscallAddress( LPVOID function );
 
 VOID SetOneshotHardwareBreakpoint( LPVOID address );
 
-void RtlInitUnicodeString( PUNICODE_STRING target, PCWSTR source )
-{
-	if( (target->Buffer = (PWSTR)source) )
-	{
-		unsigned int length = wcslen( source ) * sizeof( WCHAR );
-		if( length > 0xfffc )
-			length = 0xfffc;
+PVOID GetProcAddrExH( UINT funcHash, UINT moduleHash );
 
-		target->Length = length;
-		target->MaximumLength = target->Length + sizeof( WCHAR );
-	}
-	else target->Length = target->MaximumLength = 0;
-}
+void RtlInitUnicodeString( PUNICODE_STRING target, PCWSTR source );
 
 int main()
 {
@@ -195,7 +231,6 @@ int main()
 
 	return 0;
 }
-
 
 LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo )
 {
@@ -291,83 +326,140 @@ LPVOID FindSyscallAddress( LPVOID function )
 	return NULL;
 }
 
+void RtlInitUnicodeString( PUNICODE_STRING target, PCWSTR source )
+{
+	if( (target->Buffer = (PWSTR)source) )
+	{
+		unsigned int length = wcslen( source ) * sizeof( WCHAR );
+		if( length > 0xfffc )
+			length = 0xfffc;
+
+		target->Length = length;
+		target->MaximumLength = target->Length + sizeof( WCHAR );
+	}
+	else target->Length = target->MaximumLength = 0;
+}
+
+PVOID GetProcAddrExH( UINT funcHash, UINT moduleHash )
+{
+	PPEB peb = NtCurrentTeb()->ProcessEnvironmentBlock;
+	LIST_ENTRY* head = &peb->Ldr->InMemoryOrderModuleList;
+	LIST_ENTRY* next = head->Flink;
+	PVOID base = NULL;
+
+	while( next != head )
+	{
+		LDR_DATA_TABLE_ENTRY* entry = (LDR_DATA_TABLE_ENTRY*)((PBYTE)next - offsetof( LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks ));
+
+		UNICODE_STRING* fullname = &entry->FullDllName;
+		UNICODE_STRING* basename = (UNICODE_STRING*)((PBYTE)fullname + sizeof( UNICODE_STRING ));
+
+		char  name[64];
+		if( basename->Length < sizeof( name ) - 1 )
+		{
+			int i = 0;
+			while( basename->Buffer[i] && i < sizeof( name ) - 1 )
+			{
+				name[i] = (basename->Buffer[i] >= 'a' && 'c' <= 'z') ? basename->Buffer[i] - 'a' + 'A' : basename->Buffer[i];
+				i++;
+			}
+			name[i] = 0;
+			UINT hash = HASHALGO( name );
+			// is this our moduleHash?
+			if( hash == moduleHash ) {
+				base = entry->DllBase;
+
+				PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)base;
+				PIMAGE_NT_HEADERS nt = RVA2VA<PIMAGE_NT_HEADERS>( base, dos->e_lfanew );
+
+				PIMAGE_EXPORT_DIRECTORY exports = RVA2VA<PIMAGE_EXPORT_DIRECTORY>( base, nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress );
+				if( exports->AddressOfNames != 0 )
+				{
+					PWORD ordinals = RVA2VA<PWORD>( base, exports->AddressOfNameOrdinals );
+					PDWORD names = RVA2VA<PDWORD>( base, exports->AddressOfNames );
+					PDWORD functions = RVA2VA<PDWORD>( base, exports->AddressOfFunctions );
+
+					for( DWORD i = 0; i < exports->NumberOfNames; i++ ) {
+						LPSTR name = RVA2VA<LPSTR>( base, names[i] );
+						if( HASHALGO( name ) == funcHash ) {
+							PBYTE function = RVA2VA<PBYTE>( base, functions[ordinals[i]] );
+							return function;
+						}
+					}
+				}
+			}
+		}
+		next = next->Flink;
+	}
+
+	return NULL;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Wrappers
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
-NTSTATUS pNtMapViewOfSection( HANDLE SectionHandle, HANDLE ProcessHandle, PVOID BaseAddress, ULONG ZeroBits, SIZE_T CommitSize, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, DWORD InheritDisposition, ULONG AllocationType, ULONG Win32Protect )
-{
+NTSTATUS pNtMapViewOfSection( HANDLE SectionHandle, HANDLE ProcessHandle, PVOID BaseAddress, ULONG ZeroBits, SIZE_T CommitSize, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, DWORD InheritDisposition, ULONG AllocationType, ULONG Win32Protect ) {
 	LPVOID FunctionAddress;
 	NTSTATUS status;
-	
-	typeNtMapViewOfSection fNtMapViewOfSection;
+	hash( NtMapViewOfSection );
+	FunctionAddress = GetProcAddrExH( hashNtMapViewOfSection, hashNTDLL );    typeNtMapViewOfSection fNtMapViewOfSection;
 
-	/// Start
 	pNtMapViewOfSectionArgs.SectionHandle = SectionHandle;
 	pNtMapViewOfSectionArgs.ProcessHandle = ProcessHandle;
 	pNtMapViewOfSectionArgs.BaseAddress = BaseAddress;
 	pNtMapViewOfSectionArgs.ZeroBits = ZeroBits;
-	/// End : We can spoof these 4 arguments below.
 	pNtMapViewOfSectionArgs.CommitSize = CommitSize;
 	pNtMapViewOfSectionArgs.SectionOffset = SectionOffset;
 	pNtMapViewOfSectionArgs.ViewSize = ViewSize;
 	pNtMapViewOfSectionArgs.InheritDisposition = InheritDisposition;
 	pNtMapViewOfSectionArgs.AllocationType = AllocationType;
 	pNtMapViewOfSectionArgs.Win32Protect = Win32Protect;
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
+	fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
 
 	EnumState = NTMAPVIEWOFSECTION_ENUM;
 
 	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
-
-	fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
 	status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize, pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition, pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
-
 	return status;
 }
 
-NTSTATUS pNtUnmapViewOfSection( HANDLE ProcessHandle, PVOID BaseAddress )
-{
+NTSTATUS pNtUnmapViewOfSection( HANDLE ProcessHandle, PVOID BaseAddress ) {
 	LPVOID FunctionAddress;
 	NTSTATUS status;
+	hash( NtUnmapViewOfSection );
+	FunctionAddress = GetProcAddrExH( hashNtUnmapViewOfSection, hashNTDLL );
 
 	typeNtUnmapViewOfSection fNtUnmapViewOfSection;
-	
+
 	pNtUnmapViewOfSectionArgs.ProcessHandle = ProcessHandle;
 	pNtUnmapViewOfSectionArgs.BaseAddress = BaseAddress;
-	
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
+	fNtUnmapViewOfSection = (typeNtUnmapViewOfSection)FunctionAddress;
 
 	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
 
 	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
-
-	fNtUnmapViewOfSection = (typeNtUnmapViewOfSection)FunctionAddress;
 	status = fNtUnmapViewOfSection( NULL, NULL );
-
 	return status;
 }
 
-NTSTATUS pNtOpenSection( PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes )
-{
+NTSTATUS pNtOpenSection( PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes ) {
 	LPVOID FunctionAddress;
 	NTSTATUS status;
+	hash( NtOpenSection );
+	FunctionAddress = GetProcAddrExH( hashNtOpenSection, hashNTDLL );
 
 	typeNtOpenSection fNtOpenSection;
 
 	pNtOpenSectionArgs.SectionHandle = SectionHandle;
 	pNtOpenSectionArgs.DesiredAccess = DesiredAccess;
 	pNtOpenSectionArgs.ObjectAttributes = ObjectAttributes;
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
+	fNtOpenSection = (typeNtOpenSection)FunctionAddress;
 
 	EnumState = NTOPENSECTION_ENUM;
 
 	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
-
-	fNtOpenSection = (typeNtOpenSection)FunctionAddress;
 	status = fNtOpenSection( NULL, NULL, NULL );
-
 	return status;
 }
