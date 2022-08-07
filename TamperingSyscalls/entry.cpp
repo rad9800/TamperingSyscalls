@@ -13,6 +13,9 @@ Maybe I will write a blog post on this)
 Or use the script provided.
 We need to setup the states (what we want to fix the arguments to) and then make the right
 corresponding calls. I have provided various examples.
+
+This is an example of mapping 2 dlls from KnownDlls as an example of using, and re-using
+functions.
 --*/
 #include <Windows.h>
 #include <winternl.h>
@@ -204,6 +207,42 @@ int main()
 
 	pNtUnmapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
 	pNtUnmapViewOfSectionArgs.BaseAddress = addr;
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
+	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
+	status = SpoofSyscaller( FunctionAddress );
+	if( NT_SUCCESS( status ) ) {
+		PRINT( "Success : 0x%x\n", status );
+	}
+	else {
+		PRINT( "Error : 0x%x\n", status );
+	}
+
+
+	// We don't need to setup the arguments again as they already point to the right values.
+	WCHAR buffer2[MAX_PATH] = L"\\KnownDlls\\kernel32.dll";
+	RtlInitUnicodeString( &uni, buffer2 );
+	InitializeObjectAttributes( &oa, &uni, OBJ_CASE_INSENSITIVE, NULL, NULL );
+	
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
+	EnumState = NTOPENSECTION_ENUM;
+	status = SpoofSyscaller( FunctionAddress );
+	if( NT_SUCCESS( status ) ) {
+		PRINT( "Success : 0x%x\n", status );
+	}
+	else {
+		PRINT( "Error : 0x%x\n", status );
+	}
+
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
+	EnumState = NTMAPVIEWOFSECTION_ENUM;
+	status = SpoofSyscaller( FunctionAddress );
+	if( NT_SUCCESS( status ) ) {
+		PRINT( "Success : 0x%x\n", status );
+	}
+	else {
+		PRINT( "Error : 0x%x\n", status );
+	}
+
 	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
 	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
 	status = SpoofSyscaller( FunctionAddress );
