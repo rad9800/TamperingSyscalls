@@ -4,9 +4,12 @@ TamperingSyscallsOnly
 
 This is only the syscall retrieval method which works by placing a HWBP on syscall
 then retrieving the value stored in RAX which should be the syscall number.
+We cannot use this to get NtSetThreadContext.
 --*/
 #include <Windows.h>
 #include <winternl.h>
+
+#pragma comment(linker,"/ENTRY:main")
 
 #pragma region macros
 #define _DEBUG 1
@@ -25,8 +28,6 @@ then retrieving the value stored in RAX which should be the syscall number.
     }  
 #endif
 #pragma endregion
-
-// Can't do it for NtResumeThread or NtSetEvent as these are used after the hardware breakpoint is set.
 
 LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo );
 
@@ -50,7 +51,7 @@ DWORD RetrieveSyscall( PVOID FunctionAddress )
 int main()
 {
 	SetUnhandledExceptionFilter( OneShotHardwareBreakpointHandler );
-	
+
 	DWORD ssn;
 
 	// You can use API Hashing or something else. It wasn't exclusive to this project so I didn't
@@ -63,6 +64,7 @@ int main()
 	PRINT( "NtQueueApcThreadEx SSN \t: 0x%x\n", ssn );
 	ssn = RetrieveSyscall( GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenProcess" ) );
 	PRINT( "NtOpenProcess SSN \t: 0x%x\n", ssn );
+	// Only syscall we can't do is NtSetThreadContext.
 
 	return 0;
 }
@@ -78,7 +80,7 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 			if( ExceptionInfo->ContextRecord->Rip == ExceptionInfo->ContextRecord->Dr0 ) {
 				ExceptionInfo->ContextRecord->Dr0 = 0;
 
-				ExceptionInfo->ContextRecord->Rip += 2;	
+				ExceptionInfo->ContextRecord->Rip += 2;
 				// ExceptionInfo->ContextRecord->Rax should hold the syscall number
 				return EXCEPTION_CONTINUE_EXECUTION;
 			}
@@ -89,7 +91,7 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 
 VOID SetOneshotHardwareBreakpoint( LPVOID address )
 {
-	CONTEXT context = { 0 };
+	CONTEXT context;
 	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 	GetThreadContext( GetCurrentThread(), &context );
 
