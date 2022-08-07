@@ -220,7 +220,7 @@ int main()
 NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
 {
 	//typedef NTSTATUS( WINAPI* defaultType )();
-	NTSTATUS status;
+	NTSTATUS status = 0;
 	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
 
 	// definitions
