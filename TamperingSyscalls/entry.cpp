@@ -107,6 +107,10 @@ NtMapViewOfSectionArgs pNtMapViewOfSectionArgs;
 NtUnmapViewOfSectionArgs pNtUnmapViewOfSectionArgs;
 NtOpenSectionArgs pNtOpenSectionArgs;
 
+NTSTATUS pNtMapViewOfSection( HANDLE SectionHandle, HANDLE ProcessHandle, PVOID BaseAddress, ULONG ZeroBits, SIZE_T CommitSize, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, DWORD InheritDisposition, ULONG AllocationType, ULONG Win32Protect );
+NTSTATUS pNtUnmapViewOfSection( HANDLE ProcessHandle, PVOID BaseAddress );
+NTSTATUS pNtOpenSection( PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes );
+
 // enums
 enum
 {
@@ -129,8 +133,6 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 LPVOID FindSyscallAddress( LPVOID function );
 
 VOID SetOneshotHardwareBreakpoint( LPVOID address );
-
-NTSTATUS SpoofSyscaller( PVOID FunctionAddress );
 
 void RtlInitUnicodeString( PUNICODE_STRING target, PCWSTR source )
 {
@@ -167,14 +169,7 @@ int main()
 	RtlInitUnicodeString( &uni, buffer );
 	InitializeObjectAttributes( &oa, &uni, OBJ_CASE_INSENSITIVE, NULL, NULL );
 
-
-	pNtOpenSectionArgs.ObjectAttributes = &oa;
-	pNtOpenSectionArgs.SectionHandle = &section;
-	pNtOpenSectionArgs.DesiredAccess = SECTION_MAP_READ | SECTION_MAP_EXECUTE;
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
-	EnumState = NTOPENSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
+	pNtOpenSection( &section, SECTION_MAP_READ | SECTION_MAP_EXECUTE, &oa );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
 	}
@@ -182,22 +177,7 @@ int main()
 		PRINT( "Error : 0x%x\n", status );
 	}
 
-	// Set up these 4 in the OneShotHardwareBreakpointHandler
-	pNtMapViewOfSectionArgs.SectionHandle = section;
-	pNtMapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
-	pNtMapViewOfSectionArgs.BaseAddress = &addr;
-	pNtMapViewOfSectionArgs.ZeroBits = 0;
-	// Set up the remaining arguments in SpoofSyscaller.
-	pNtMapViewOfSectionArgs.CommitSize = 0;
-	pNtMapViewOfSectionArgs.SectionOffset = NULL;
-	pNtMapViewOfSectionArgs.ViewSize = &size;
-	pNtMapViewOfSectionArgs.InheritDisposition = 1;
-	pNtMapViewOfSectionArgs.AllocationType = 0;
-	pNtMapViewOfSectionArgs.Win32Protect = PAGE_READONLY;
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
-	EnumState = NTMAPVIEWOFSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
+	status = pNtMapViewOfSection( section, NtCurrentProcess(), &addr, 0, 0, NULL, &size, 1, 0, PAGE_READONLY );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
 	}
@@ -205,47 +185,7 @@ int main()
 		PRINT( "Error : 0x%x\n", status );
 	}
 
-	pNtUnmapViewOfSectionArgs.ProcessHandle = NtCurrentProcess();
-	pNtUnmapViewOfSectionArgs.BaseAddress = addr;
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
-	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
-	if( NT_SUCCESS( status ) ) {
-		PRINT( "Success : 0x%x\n", status );
-	}
-	else {
-		PRINT( "Error : 0x%x\n", status );
-	}
-
-
-	// We don't need to setup the arguments again as they already point to the right values.
-	WCHAR buffer2[MAX_PATH] = L"\\KnownDlls\\kernel32.dll";
-	RtlInitUnicodeString( &uni, buffer2 );
-	InitializeObjectAttributes( &oa, &uni, OBJ_CASE_INSENSITIVE, NULL, NULL );
-	
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
-	EnumState = NTOPENSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
-	if( NT_SUCCESS( status ) ) {
-		PRINT( "Success : 0x%x\n", status );
-	}
-	else {
-		PRINT( "Error : 0x%x\n", status );
-	}
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
-	EnumState = NTMAPVIEWOFSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
-	if( NT_SUCCESS( status ) ) {
-		PRINT( "Success : 0x%x\n", status );
-	}
-	else {
-		PRINT( "Error : 0x%x\n", status );
-	}
-
-	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
-	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
-	status = SpoofSyscaller( FunctionAddress );
+	status = pNtUnmapViewOfSection( NtCurrentProcess(), addr );
 	if( NT_SUCCESS( status ) ) {
 		PRINT( "Success : 0x%x\n", status );
 	}
@@ -256,37 +196,6 @@ int main()
 	return 0;
 }
 
-NTSTATUS SpoofSyscaller( PVOID FunctionAddress )
-{
-	//typedef NTSTATUS( WINAPI* defaultType )();
-	NTSTATUS status = 0;
-	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
-
-	// definitions
-	//defaultType fDefaultType;
-	typeNtMapViewOfSection fNtMapViewOfSection;
-	typeNtUnmapViewOfSection fNtUnmapViewOfSection;
-	typeNtOpenSection fNtOpenSection;
-
-	switch( EnumState ) {
-	case NTMAPVIEWOFSECTION_ENUM:
-		fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
-		status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize, pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition, pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
-		break;
-
-	case NTUNMAPVIEWOFSECTION_ENUM:
-		fNtUnmapViewOfSection = (typeNtUnmapViewOfSection)FunctionAddress;
-		status = fNtUnmapViewOfSection( NULL, NULL );
-		break;
-
-	case NTOPENSECTION_ENUM:
-		fNtOpenSection = (typeNtOpenSection)FunctionAddress;
-		status = fNtOpenSection( NULL, NULL, NULL );
-		break;
-	}
-
-	return status;
-}
 
 LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo )
 {
@@ -380,4 +289,85 @@ LPVOID FindSyscallAddress( LPVOID function )
 		}
 	}
 	return NULL;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Wrappers
+
+
+NTSTATUS pNtMapViewOfSection( HANDLE SectionHandle, HANDLE ProcessHandle, PVOID BaseAddress, ULONG ZeroBits, SIZE_T CommitSize, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, DWORD InheritDisposition, ULONG AllocationType, ULONG Win32Protect )
+{
+	LPVOID FunctionAddress;
+	NTSTATUS status;
+	
+	typeNtMapViewOfSection fNtMapViewOfSection;
+
+	/// Start
+	pNtMapViewOfSectionArgs.SectionHandle = SectionHandle;
+	pNtMapViewOfSectionArgs.ProcessHandle = ProcessHandle;
+	pNtMapViewOfSectionArgs.BaseAddress = BaseAddress;
+	pNtMapViewOfSectionArgs.ZeroBits = ZeroBits;
+	/// End : We can spoof these 4 arguments below.
+	pNtMapViewOfSectionArgs.CommitSize = CommitSize;
+	pNtMapViewOfSectionArgs.SectionOffset = SectionOffset;
+	pNtMapViewOfSectionArgs.ViewSize = ViewSize;
+	pNtMapViewOfSectionArgs.InheritDisposition = InheritDisposition;
+	pNtMapViewOfSectionArgs.AllocationType = AllocationType;
+	pNtMapViewOfSectionArgs.Win32Protect = Win32Protect;
+
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtMapViewOfSection" );
+
+	EnumState = NTMAPVIEWOFSECTION_ENUM;
+
+	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
+
+	fNtMapViewOfSection = (typeNtMapViewOfSection)FunctionAddress;
+	status = fNtMapViewOfSection( NULL, NULL, NULL, NULL, pNtMapViewOfSectionArgs.CommitSize, pNtMapViewOfSectionArgs.SectionOffset, pNtMapViewOfSectionArgs.ViewSize, pNtMapViewOfSectionArgs.InheritDisposition, pNtMapViewOfSectionArgs.AllocationType, pNtMapViewOfSectionArgs.Win32Protect );
+
+	return status;
+}
+
+NTSTATUS pNtUnmapViewOfSection( HANDLE ProcessHandle, PVOID BaseAddress )
+{
+	LPVOID FunctionAddress;
+	NTSTATUS status;
+
+	typeNtUnmapViewOfSection fNtUnmapViewOfSection;
+	
+	pNtUnmapViewOfSectionArgs.ProcessHandle = ProcessHandle;
+	pNtUnmapViewOfSectionArgs.BaseAddress = BaseAddress;
+	
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtUnmapViewOfSection" );
+
+	EnumState = NTUNMAPVIEWOFSECTION_ENUM;
+
+	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
+
+	fNtUnmapViewOfSection = (typeNtUnmapViewOfSection)FunctionAddress;
+	status = fNtUnmapViewOfSection( NULL, NULL );
+
+	return status;
+}
+
+NTSTATUS pNtOpenSection( PHANDLE SectionHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes )
+{
+	LPVOID FunctionAddress;
+	NTSTATUS status;
+
+	typeNtOpenSection fNtOpenSection;
+
+	pNtOpenSectionArgs.SectionHandle = SectionHandle;
+	pNtOpenSectionArgs.DesiredAccess = DesiredAccess;
+	pNtOpenSectionArgs.ObjectAttributes = ObjectAttributes;
+
+	FunctionAddress = GetProcAddress( GetModuleHandleA( "NTDLL.dll" ), "NtOpenSection" );
+
+	EnumState = NTOPENSECTION_ENUM;
+
+	SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );
+
+	fNtOpenSection = (typeNtOpenSection)FunctionAddress;
+	status = fNtOpenSection( NULL, NULL, NULL );
+
+	return status;
 }
