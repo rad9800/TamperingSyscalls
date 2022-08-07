@@ -87,58 +87,20 @@ LONG WINAPI OneShotHardwareBreakpointHandler( PEXCEPTION_POINTERS ExceptionInfo 
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
-typedef struct {
-	HANDLE		hThread;
-	HANDLE		hSynvnt;
-	LPVOID		address;
-} ONE_SHOT;
-
-DWORD WINAPI RegisterDebug( LPVOID lpParameter )
-{
-	ONE_SHOT* OneShot = (ONE_SHOT*)lpParameter;
-
-	if( !SuspendThread( OneShot->hThread ) ) {
-
-		CONTEXT context = { 0 };
-		context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-		if( GetThreadContext( OneShot->hThread, &context ) )
-		{
-
-			context.Dr0 = (DWORD64)OneShot->address;
-			context.Dr6 = 0;
-			context.Dr7 = (context.Dr7 & ~(((1 << 2) - 1) << 16)) | (0 << 16);
-			context.Dr7 = (context.Dr7 & ~(((1 << 2) - 1) << 18)) | (0 << 18);
-			context.Dr7 = (context.Dr7 & ~(((1 << 1) - 1) << 0)) | (1 << 0);
-
-			context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
-			SetThreadContext( OneShot->hThread, &context );
-		}
-		ResumeThread( OneShot->hThread );
-	}
-
-	SetEvent( OneShot->hSynvnt );
-
-	return 0;
-}
-
 VOID SetOneshotHardwareBreakpoint( LPVOID address )
 {
-	ONE_SHOT* OneShot =
-		(ONE_SHOT*)HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof( ONE_SHOT ) );
+	CONTEXT context = { 0 };
+	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+	GetThreadContext( GetCurrentThread(), &context );
 
-	OneShot->address = address;
-	OneShot->hSynvnt = CreateEvent( 0, 0, 0, 0 );
-	OneShot->hThread = OpenThread( THREAD_ALL_ACCESS, FALSE, GetCurrentThreadId() );
+	context.Dr0 = (DWORD64)address;
+	context.Dr6 = 0;
+	context.Dr7 = (context.Dr7 & ~(((1 << 2) - 1) << 16)) | (0 << 16);
+	context.Dr7 = (context.Dr7 & ~(((1 << 2) - 1) << 18)) | (0 << 18);
+	context.Dr7 = (context.Dr7 & ~(((1 << 1) - 1) << 0)) | (1 << 0);
 
-	HANDLE hThread = CreateThread( 0, 0, RegisterDebug, (LPVOID)OneShot, 0, 0 );
-
-	WaitForSingleObject( OneShot->hSynvnt, INFINITE );
-
-	CloseHandle( OneShot->hSynvnt );
-	CloseHandle( OneShot->hThread );
-	CloseHandle( hThread );
-
-	HeapFree( GetProcessHeap(), 0, OneShot );
+	context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+	SetThreadContext( GetCurrentThread(), &context );
 
 	return;
 }
