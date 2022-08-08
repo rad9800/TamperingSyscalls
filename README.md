@@ -58,9 +58,10 @@ To generate the required functions, use `gen.py`. This supports either:
 
 - Comma separated functions
 ```
-python3 gen.py NtOpenSection,NtMapViewOfSection,NtUnmapViewOfSection
+python gen.py NtOpenSection,NtMapViewOfSection,NtUnmapViewOfSection
 ```
 
+It will produce 3 files: TamperingSyscalls.cpp, TamperingSyscalls.h, and main.cpp. You can `#include "TamperingSyscalls.h"` into your project. We can call the functions by appending the function name to p, for example pNtOpenSection(..,..,..);
 
 
 ### Limitations
