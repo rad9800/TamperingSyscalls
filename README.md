@@ -35,17 +35,17 @@ if( ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP )
 7. We will then fix the remaining registers we had previously set to NULL. The reason it is 4 is that this the x64 calling convention dictates we use RCX, RDX, R8, R9 for the first 4 arguments, and the rest are setup on the stack. It is possible to manually set these up the >4 parameters on the stack but this is beyond the scope of this project as it would require inline assembly. The reason why it is R10 not RCX is that at the start of every syscall stub `mov r10, rcx` as the RCX register is destroyed in the next instructions.
 ```c
 case NTMAPVIEWOFSECTION_ENUM:
-					ExceptionInfo->ContextRecord->R10 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->SectionHandle;
+	ExceptionInfo->ContextRecord->R10 =
+		(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->SectionHandle;
 
-					ExceptionInfo->ContextRecord->Rdx =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ProcessHandle;
+	ExceptionInfo->ContextRecord->Rdx =
+		(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ProcessHandle;
 
-					ExceptionInfo->ContextRecord->R8 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->BaseAddress;
+	ExceptionInfo->ContextRecord->R8 =
+		(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->BaseAddress;
 
-					ExceptionInfo->ContextRecord->R9 =
-						(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ZeroBits;
+	ExceptionInfo->ContextRecord->R9 =
+		(DWORD_PTR)((NtMapViewOfSectionArgs*)(StateArray[EnumState].arguments))->ZeroBits;
 ```
 We can see in this example we are fixing the arguments for NtMapViewOfSection.
 
