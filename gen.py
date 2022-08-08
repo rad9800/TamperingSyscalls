@@ -209,6 +209,11 @@ def build_function_wrapper(data: dict):
     return code
 
 
+def gen_main(file_name: str):
+    """generate main.cpp"""
+    return f'#include "{file_name}.h"\n\nint main(){{\n    SetUnhandledExceptionFilter( OneShotHardwareBreakpointHandler );\n    /* Code Here */\n}}'
+
+
 def main():
     """Entry!"""
     args = get_args()
@@ -235,16 +240,18 @@ def main():
     statearray = build_state_arrays(data)
     oneshot = build_oneshot_case(data)
     wrapper = build_function_wrapper(data)
-    print(build_func_defs(data))
 
-    with open("data/template.cpp", "r+") as f:
+    with open("data/template.cpp", "r") as f:
         src = f.read()
         src = src.replace("$ONESHOT_CASE$", oneshot)
         src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
         src = src.replace("$FILE_NAME$", f"{args.output}.h")
-        f.write(src)
 
-    with open("data/template.h", "r+") as f:
+    with open(f"{args.output}.cpp", "w") as f:
+        f.write(src)
+        print(f"[+] Wrote: {args.output}.cpp!")
+
+    with open("data/template.h", "r") as f:
         src = f.read()
         src = src.replace("$ARG_TYPEDEFS$", arg_struct)
         src = src.replace("$FUNCTION_DEFS$", function_typedef)
@@ -254,7 +261,14 @@ def main():
         src = src.replace("$STATE_ARRAY$", statearray)
         src = src.replace("$ONESHOT_CASE$", oneshot)
         src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
+
+    with open(f"{args.output}.h", "w") as f:
         f.write(src)
+        print(f"[+] Wrote: {args.output}.h!")
+
+    with open("main.cpp", "w") as f:
+        print(f"[+] Wrote: main.cpp!")
+        f.write(gen_main(args.output))
 
 
 if __name__ == "__main__":
