@@ -6,7 +6,13 @@ def get_args():
     """args!!!"""
     parser = argparse.ArgumentParser(description="Generate CPP for TamperingSyscalls")
     parser.add_argument("functions", help="Comma seperated list of NTDLL Functions")
-    parser.add_argument("--output", "-o", required=False, default="syscalls.cpp", help="Path to output file")
+    parser.add_argument(
+        "--output",
+        "-o",
+        required=False,
+        default="TamperingSyscalls",
+        help="Path to output file",
+    )
     args = parser.parse_args()
     return args
 
@@ -16,12 +22,9 @@ def get_prototypes(target_functions: list):
     targets = {}
     with open("data/prototypes.json") as f:
         data = json.load(f)
-        if target_functions == "all":
-            targets = data
-        else:
-            for function in data.keys():
-                if function in target_functions:
-                    targets[function] = data[function]
+        for function in data.keys():
+            if function in target_functions:
+                targets[function] = data[function]
     return targets
 
 
@@ -44,7 +47,7 @@ def build_arg_struct(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        struct = "typedef struct {\n\r"
+        struct = "typedef struct {\n"
         for param in params:
             struct += f"    {param['type']:<27}{param['name']};\n"
         else:
@@ -62,7 +65,7 @@ def build_typedef(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        typedef = f"typedef {function_data['type']} (NTAPI* type{function_name})(\n\r"
+        typedef = f"typedef {function_data['type']} (NTAPI* type{function_name})(\n"
 
         for idx, param in enumerate(params):
             if idx == len(params) - 1:
@@ -70,7 +73,7 @@ def build_typedef(data: dict):
             else:
                 typedef += f"    {param['type']:<25}{param['name']},\n"
         else:
-            typedef += ");\n\n"
+            typedef += ");\n"
 
         code += typedef
 
@@ -84,7 +87,7 @@ def build_arg_defs(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        code += f"{function_name}Args p{function_name}Args;\n\n"
+        code += f"{function_name}Args p{function_name}Args;\n"
 
     return f"{code}\n"
 
@@ -142,14 +145,14 @@ def build_oneshot_case(data: dict):
         params = function_data["params"]
 
         mappings = {0: "R10", 1: "Rdx", 2: "R8", 3: "R9"}
-        case = f"case {function_name.upper()}_ENUM:\n"
+        case = f"{' ' * 20}case {function_name.upper()}_ENUM:\n"
         for idx in range(0, 4):
             if idx >= len(params):
                 break
             register = mappings[idx]
-            case += f"    ExceptionInfo->ContextRecord->{register} =\n    (DWORD_PTR)(({function_name}Args*)(StateArray[EnumState].arguments))->{params[idx]['name']};\n\n"
+            case += f"{' ' * 24}ExceptionInfo->ContextRecord->{register} = (DWORD_PTR)(({function_name}Args*)(StateArray[EnumState].arguments))->{params[idx]['name']};\n"
 
-        case += f"    break;\n\n"
+        case += f"{' ' * 24}break;\n"
         code += case
 
     return f"{code}\n"
@@ -182,7 +185,7 @@ def build_function_wrapper(data: dict):
 
     for function_name, function_data in data.items():
         params = function_data["params"]
-        args = ",".join([f"{param['type']} {param['name']}" for param in params])
+        args = ", ".join([f"{param['type']} {param['name']}" for param in params])
         wrapper = f"{function_data['type']} p{function_name}({args}) {{\n"
         wrapper += "    LPVOID FunctionAddress;\n    NTSTATUS status;\n\n"
         wrapper += f"    hash( {function_name} );\n"
@@ -232,8 +235,16 @@ def main():
     statearray = build_state_arrays(data)
     oneshot = build_oneshot_case(data)
     wrapper = build_function_wrapper(data)
+    print(build_func_defs(data))
 
-    with open("data/template.cpp", "r") as f:
+    with open("data/template.cpp", "r+") as f:
+        src = f.read()
+        src = src.replace("$ONESHOT_CASE$", oneshot)
+        src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
+        src = src.replace("$FILE_NAME$", f"{args.output}.h")
+        f.write(src)
+
+    with open("data/template.h", "r+") as f:
         src = f.read()
         src = src.replace("$ARG_TYPEDEFS$", arg_struct)
         src = src.replace("$FUNCTION_DEFS$", function_typedef)
@@ -243,8 +254,6 @@ def main():
         src = src.replace("$STATE_ARRAY$", statearray)
         src = src.replace("$ONESHOT_CASE$", oneshot)
         src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
-
-    with open(args.output, "w") as f:
         f.write(src)
 
 
