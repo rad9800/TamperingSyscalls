@@ -6,6 +6,13 @@ def get_args():
     """args!!!"""
     parser = argparse.ArgumentParser(description="Generate CPP for TamperingSyscalls")
     parser.add_argument("functions", help="Comma seperated list of NTDLL Functions")
+    parser.add_argument(
+        "--output",
+        "-o",
+        required=False,
+        default="TamperingSyscalls",
+        help="Path to output file",
+    )
     args = parser.parse_args()
     return args
 
@@ -15,12 +22,9 @@ def get_prototypes(target_functions: list):
     targets = {}
     with open("data/prototypes.json") as f:
         data = json.load(f)
-        if target_functions == "all":
-            targets = data
-        else:
-            for function in data.keys():
-                if function in target_functions:
-                    targets[function] = data[function]
+        for function in data.keys():
+            if function in target_functions:
+                targets[function] = data[function]
     return targets
 
 
@@ -43,7 +47,7 @@ def build_arg_struct(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        struct = "typedef struct {\n\r"
+        struct = "typedef struct {\n"
         for param in params:
             struct += f"    {param['type']:<27}{param['name']};\n"
         else:
@@ -61,7 +65,7 @@ def build_typedef(data: dict):
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        typedef = f"typedef {function_data['type']} (NTAPI* type{function_name})(\n\r"
+        typedef = f"typedef {function_data['type']} (NTAPI* type{function_name})(\n"
 
         for idx, param in enumerate(params):
             if idx == len(params) - 1:
@@ -69,51 +73,67 @@ def build_typedef(data: dict):
             else:
                 typedef += f"    {param['type']:<25}{param['name']},\n"
         else:
-            typedef += ");\n\n"
+            typedef += ");\n"
 
         code += typedef
 
     return f"{code}\n"
 
 
-def build_definitions(data: dict):
+def build_arg_defs(data: dict):
     """the initial definition"""
     code = ""
 
     for function_name, function_data in data.items():
         params = function_data["params"]
 
-        code += f"type{function_name} f{function_name};\n{function_name}Args p{function_name}Args;\n\n"
+        code += f"{function_name}Args p{function_name}Args;\n"
 
     return f"{code}\n"
 
 
-def build_function_case(data: dict):
-    """build the function case"""
-
+def build_func_defs(data: dict):
+    """the function defs"""
     code = ""
 
     for function_name, function_data in data.items():
         params = function_data["params"]
+        args = ", ".join([f"{param['type']} {param['name']}" for param in params])
+        code += f"{function_data['type']} p{function_name}({args});\n"
+    return f"{code}\n"
 
-        args = []
 
-        invoke = f"case {function_name.upper()}_ENUM:\n"
-        invoke += f"    f{function_name} = (type{function_name})FunctionAddress;\n"
+def build_enum_defs(data: dict):
+    """the function defs"""
+    code = "enum\n{\n    "
 
-        for idx, param in enumerate(params):
-            if idx <= 3:
-                args.append("NULL")
-            else:
-                args.append(f"p{function_name}Args.{param['name']}")
+    enum = [function_name.upper() + "_ENUM" for function_name in data.keys()]
 
-            joined = ", ".join(args)
+    enum[0] = enum[0].replace(enum[0], f"{enum[0]} = 0")
 
-        invoke += f"    status = f{function_name}({joined});\n    break;\n\n"
+    code += ",\n    ".join(enum)
 
-        code += invoke
+    code += "\n};\n"
 
     return f"{code}\n"
+
+
+def build_function_call(function_name, params: list):
+    """build the function case"""
+
+    code = ""
+
+    args = []
+
+    for idx, param in enumerate(params):
+        if idx <= 3:
+            args.append("NULL")
+        else:
+            args.append(f"p{function_name}Args.{param['name']}")
+
+        joined = ", ".join(args)
+
+    return f"    status = f{function_name}({joined});\n"
 
 
 def build_oneshot_case(data: dict):
@@ -125,14 +145,14 @@ def build_oneshot_case(data: dict):
         params = function_data["params"]
 
         mappings = {0: "R10", 1: "Rdx", 2: "R8", 3: "R9"}
-        case = f"case {function_name.upper()}_ENUM:\n"
+        case = f"{' ' * 20}case {function_name.upper()}_ENUM:\n"
         for idx in range(0, 4):
             if idx >= len(params):
                 break
             register = mappings[idx]
-            case += f"    ExceptionInfo->ContextRecord->{register} =\n    (DWORD_PTR)(({function_name}Args*)(StateArray[EnumState].arguments))->{params[idx]['name']};\n\n"
-        
-        case += f'    break;\n\n'
+            case += f"{' ' * 24}ExceptionInfo->ContextRecord->{register} = (DWORD_PTR)(({function_name}Args*)(StateArray[EnumState].arguments))->{params[idx]['name']};\n"
+
+        case += f"{' ' * 24}break;\n"
         code += case
 
     return f"{code}\n"
@@ -159,6 +179,36 @@ def build_state_arrays(data: dict):
     return f"{code}\n"
 
 
+def build_function_wrapper(data: dict):
+    """set the state arrays"""
+    code = ""
+
+    for function_name, function_data in data.items():
+        params = function_data["params"]
+        args = ", ".join([f"{param['type']} {param['name']}" for param in params])
+        wrapper = f"{function_data['type']} p{function_name}({args}) {{\n"
+        wrapper += "    LPVOID FunctionAddress;\n    NTSTATUS status;\n\n"
+        wrapper += f"    hash( {function_name} );\n"
+        wrapper += (
+            f"    FunctionAddress = GetProcAddrExH( hash{function_name}, hashNTDLL );\n"
+        )
+        wrapper += f"    type{function_name} f{function_name};\n\n"
+
+        for param in params:
+            wrapper += f"    p{function_name}Args.{param['name']} = {param['name']};\n"
+
+        wrapper += f"    f{function_name} = (type{function_name})FunctionAddress;\n\n"
+        wrapper += f"    EnumState = {function_name.upper()}_ENUM;\n\n"
+        wrapper += f"    SetOneshotHardwareBreakpoint( FindSyscallAddress( FunctionAddress ) );\n"
+
+        wrapper += f"{build_function_call(function_name, params)}"
+
+        wrapper += "    return status;\n}\n\n"
+        code += wrapper
+
+    return code
+
+
 def main():
     """Entry!"""
     args = get_args()
@@ -175,23 +225,36 @@ def main():
     if data == None:
         return
 
+    src = ""
+
     arg_struct = build_arg_struct(data)
-    typedef = build_typedef(data)
-    definitions = build_definitions(data)
-    initial_case = build_function_case(data)
-    oneshot = build_oneshot_case(data)
+    function_typedef = build_typedef(data)
+    arg_defs = build_arg_defs(data)
+    func_defs = build_func_defs(data)
+    enum_defs = build_enum_defs(data)
     statearray = build_state_arrays(data)
-    print(arg_struct)
-    print()
-    print(typedef)
-    print()
-    print(definitions)
-    print()
-    print(initial_case)
-    print()
-    print(oneshot)
-    print()
-    print(statearray)
+    oneshot = build_oneshot_case(data)
+    wrapper = build_function_wrapper(data)
+    print(build_func_defs(data))
+
+    with open("data/template.cpp", "r+") as f:
+        src = f.read()
+        src = src.replace("$ONESHOT_CASE$", oneshot)
+        src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
+        src = src.replace("$FILE_NAME$", f"{args.output}.h")
+        f.write(src)
+
+    with open("data/template.h", "r+") as f:
+        src = f.read()
+        src = src.replace("$ARG_TYPEDEFS$", arg_struct)
+        src = src.replace("$FUNCTION_DEFS$", function_typedef)
+        src = src.replace("$ARG_DEFS$", arg_defs)
+        src = src.replace("$FUNC_DEFS$", func_defs)
+        src = src.replace("$ENUM_DEFS$", enum_defs)
+        src = src.replace("$STATE_ARRAY$", statearray)
+        src = src.replace("$ONESHOT_CASE$", oneshot)
+        src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
+        f.write(src)
 
 
 if __name__ == "__main__":
