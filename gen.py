@@ -208,6 +208,9 @@ def build_function_wrapper(data: dict):
 
     return code
 
+def gen_main(file_name: str):
+    """generate main.cpp"""
+    return f"#include \"{file_name}.h\"\n\nint main(){{\n    SetUnhandledExceptionFilter( OneShotHardwareBreakpointHandler );\n    /* Code Here */\n}}"
 
 def main():
     """Entry!"""
@@ -235,7 +238,6 @@ def main():
     statearray = build_state_arrays(data)
     oneshot = build_oneshot_case(data)
     wrapper = build_function_wrapper(data)
-    print(build_func_defs(data))
 
     with open("data/template.cpp", "r+") as f:
         src = f.read()
@@ -255,6 +257,9 @@ def main():
         src = src.replace("$ONESHOT_CASE$", oneshot)
         src = src.replace("$WRAPPER_FUNCTIONS$", wrapper)
         f.write(src)
+
+    with open('main.cpp', 'w') as f:
+        f.write(gen_main(args.output))
 
 
 if __name__ == "__main__":
