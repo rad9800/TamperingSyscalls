@@ -2,6 +2,8 @@
 TamperingSyscallsOnly
 - rad98
 
+This can be compiled as .c too.
+
 This is only the syscall retrieval method which works by placing a HWBP on syscall
 then retrieving the value stored in RAX which should be the syscall number.
 We cannot use this to get NtSetThreadContext.
@@ -9,7 +11,6 @@ We cannot use this to get NtSetThreadContext.
 #include <Windows.h>
 #include <winternl.h>
 
-#pragma comment(linker,"/ENTRY:main")
 
 #pragma region macros
 #define _DEBUG 1
