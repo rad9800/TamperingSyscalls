@@ -61,12 +61,12 @@ To generate the required functions, use `gen.py`. This supports either:
 python gen.py NtOpenSection,NtMapViewOfSection,NtUnmapViewOfSection
 ```
 
-It will produce 3 files: TamperingSyscalls.cpp, TamperingSyscalls.h, and main.cpp. You can `#include "TamperingSyscalls.h"` into your project. We can call the functions by appending the function name to p, for example pNtOpenSection(..,..,..);
+It will produce 3 files: TamperingSyscalls.cpp, TamperingSyscalls.h, and main.cpp. You can `#include "TamperingSyscalls.h"` into your project. We can call the functions by appending the function name to p, for example `pNtOpenSection(...);`
 
 
 ### Limitations
 We cannot set a breakpoint on NtSetThreadContext or it's variants as this is used to set the debug registers.
-There is a brief period where the debug registers are set, but this is very small.
+There is a brief period where the debug registers are set, but this is very small and I do not think we will be detected for holding an open Dr0.
 
 I have published a small blog post, touching upon these techniques.
 [TamperingSyscall's Blog Post](https://fool.ish.wtf/2022/08/tamperingsyscalls.html)
