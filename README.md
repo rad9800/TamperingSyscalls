@@ -69,5 +69,7 @@ We cannot set a breakpoint on NtSetThreadContext or it's variants as this is use
 There is a brief period where the debug registers are set, but this is very small and I do not think we will be detected for holding an open Dr0.
 
 I have published a small blog post, touching upon these techniques.
+
 [TamperingSyscall's Overview Blog Post](https://fool.ish.wtf/2022/08/tamperingsyscalls.html)
+
 [TamperingSyscall's Fake Intropspection Blog Post](https://fool.ish.wtf/2022/08/feeding-edrs-false-telemetry.html)
